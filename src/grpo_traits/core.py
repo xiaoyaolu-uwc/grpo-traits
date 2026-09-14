@@ -39,10 +39,13 @@ def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
     Computes advantages from rewards, optionally without division by std.
     """
     mean_r = stats.mean(rewards)
-    std_r = stats.stdev(rewards)
-    advantages = [(r - mean_r) for r in rewards]
+    print(mean_r)
+    std_r = stats.pstdev(rewards)
+    print(std_r)
     if std_correct:
-        advantages /= (std_r + 1e-5)
+        advantages = [(r - mean_r) /  (std_r + 1e-5) for r in rewards]
+    else:
+        advantages = [(r - mean_r) for r in rewards]
     advantages = torch.tensor(advantages, dtype=torch.float32, device="mps")
     return advantages
 
