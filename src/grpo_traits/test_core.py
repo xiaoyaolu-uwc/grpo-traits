@@ -62,7 +62,21 @@ def test_adv_values():
         assert correct[i] == computed[i]
     
 # =====================================================================================
-# 2. Tests for compute loss
+# 3. Tests for compute loss
 # =====================================================================================
 
-
+def test_loss():
+    advantages = torch.tensor([0.7071, 0.7071, -1.4142])[:, None]
+    log_probs = torch.tensor([
+        [-3, -2, -2, -8],
+        [-3, -1, -8, -8],
+        [-3, -4, -2, -2]
+    ])
+    completion_mask = torch.tensor([
+        [0, 1, 1, 0],
+        [0, 1, 0, 0],
+        [0, 1, 1, 1]
+    ])
+    max_length = 4
+    expected_loss = pytest.approx(-1.944525, rel=1e-5)
+    assert core.compute_loss(advantages, log_probs, completion_mask, max_length) == expected_loss

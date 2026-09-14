@@ -1,8 +1,8 @@
 """
 Performs the core computations in GRPO which do not require loading model weights, including:
 * The completion mask given .... Output of form (n_rollouts, seq_len)
-* The advantage given rewards for each rollout. Output of form (n_rollouts)
-* The loss for the episode, given advantage & logprobs, both (n_rollouts, seq_len). Output scalar.
+* The advantage given rewards for each rollout. Output of form (n_rollouts, 1)
+* The loss for the episode, given advantage (n_rollouts) & logprobs (n_rollouts, seq_len). Output scalar.
 """
 
 import torch
@@ -46,7 +46,7 @@ def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
         advantages = [(r - mean_r) /  (std_r + 1e-5) for r in rewards]
     else:
         advantages = [(r - mean_r) for r in rewards]
-    advantages = torch.tensor(advantages, dtype=torch.float32, device="mps")
+    advantages = torch.tensor(advantages, dtype=torch.float32, device="mps")[:, None]
     return advantages
 
 def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_mask: torch.Tensor,
@@ -56,16 +56,17 @@ def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_m
     different methods for loss aggregation.
     """
     # Check if loss aggregation mode is valid
-    if aggregation != "max_length" or "sequence" or "token":
-        raise ValueError("aggregation should equal one of 'sequence', 'token', or 'length'")
+    valid_agg = ["max_length", "sequence", "token"]
+    if aggregation not in valid_agg:
+        raise ValueError("aggregation should equal one of 'sequence', 'token', or 'max_length'")
     # Compute and return loss
     if aggregation == "max_length":
-        loss = torch.sum(advantages.detach() * log_probs / max_length)
+        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / max_length
     elif aggregation == "sequence":
-        seq_lengths = torch.sum(completion_mask, axis=-1)[:, None]
-        loss = torch.sum(advantages.detach() * log_probs / seq_lengths)
+        seq_lengths = -torch.sum(completion_mask, axis=-1)[:, None]
+        loss = - torch.sum(advantages.detach() * log_probs * completion_mask / seq_lengths)
     else:
         num_tokens = torch.sum(completion_mask).item()
-        loss = torch.sum(advantage.detach() * log_probs / num_tokens)
+        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / num_tokens
     return loss
 
