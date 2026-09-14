@@ -19,16 +19,16 @@ def stack_rollouts(rollouts: list, prompt_length: int,
     for rollout in rollouts:
         # Compute relevant lengths
         seq_len = rollout.shape[0] - prompt_length
-        pad_len = max_length - seq_len
+        pad_len = max_length - rollout.shape[0]
         # Build padded rollouts
         padding = torch.full((pad_len, ), pad_id)
-        padded = torch.cat(rollout, padding)
+        padded = torch.cat((rollout, padding), dim=0)
         stacked_rollouts.append(padded)
         # Build mask
         prompt_indic = torch.full((prompt_length, ), 0)
         completion_indic = torch.full((seq_len, ), 1)
         padding_indic = torch.full((pad_len, ), 0)
-        completion_mask = torch.cat(prompt_indic, completion_indic, padding_indic)
+        completion_mask = torch.cat([prompt_indic, completion_indic, padding_indic], dim=0)
         mask.append(completion_mask)
     mask = torch.stack(mask)
     stacked_rollouts = torch.stack(stacked_rollouts)
