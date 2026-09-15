@@ -13,13 +13,13 @@ def tokenize_prompts(prompts: list, tokenizer: AutoTokenizer) -> torch.Tensor:
         padded_prompts.append(padded_prompt)
     return torch.tensor(padded_prompts)
 
-@torch.inference_mode
+@torch.no_grad
 def generate_rollouts(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, prompts: list, 
                       max_new: int, num_rollouts: int) -> torch.Tensor:
     """
     Produce completion tensor, shape (batch, num_rollouts, max_completion_length)
     """
-    tokenized_prompts = tokenize_prompts(prompts, tokenizer)
+    tokenized_prompts = tokenize_prompts(prompts, tokenizer).to(model.device)
     completions = model.generate(tokenized_prompts, max_new_tokens=max_new, 
                                  num_return_sequences=num_rollouts)
     return completions
@@ -27,10 +27,10 @@ def generate_rollouts(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, pro
 def rollout_logprobs(model: AutoModelForCausalLM, completions: torch.Tensor):
     """
     Produce tensor of logprobs for each completion, shape (batch, num_rollouts, 
-    max_completion_length)
+    max_completion_length - 1). There are no log probs for the first token.
     """
     # Get logits over completions
-    logits = model(completions)
+    logits = model(completions).logits
     # Convert logits to log probaiblities
     log_probs_over_volcab = torch.log_softmax(logits, dim=-1)
     # Truncate probs and shift tokens for indexing probabilities
@@ -40,5 +40,5 @@ def rollout_logprobs(model: AutoModelForCausalLM, completions: torch.Tensor):
     target_log_probs = prediction_log_probs.gather(
         dim=-1,
         index=target_tokens.unsqueeze(-1)
-    )
+    ).squeeze(-1)
     return target_log_probs
