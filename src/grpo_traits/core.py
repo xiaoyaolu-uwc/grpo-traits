@@ -10,7 +10,7 @@ import statistics as stats
 
 
 def stack_rollouts(rollouts: list, prompt_length: int, 
-                   max_length: int, pad_id: int) -> tuple:
+                   max_new: int, pad_id: int) -> tuple:
     """
     Builds rollouts tensor and completion mask.
     """
@@ -19,7 +19,7 @@ def stack_rollouts(rollouts: list, prompt_length: int,
     for rollout in rollouts:
         # Compute relevant lengths
         seq_len = rollout.shape[0] - prompt_length
-        pad_len = max_length - rollout.shape[0]
+        pad_len = max_new - rollout.shape[0]
         # Build padded rollouts
         padding = torch.full((pad_len, ), pad_id)
         padded = torch.cat((rollout, padding), dim=0)
@@ -34,7 +34,7 @@ def stack_rollouts(rollouts: list, prompt_length: int,
     stacked_rollouts = torch.stack(stacked_rollouts)
     return stacked_rollouts, mask
 
-def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
+def compute_advantage(rewards: list, std_correct: bool = True, device: str = None) -> torch.Tensor:
     """
     Computes advantages from rewards, optionally without division by std.
     """
@@ -46,24 +46,25 @@ def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
         advantages = [(r - mean_r) /  (std_r + 1e-5) for r in rewards]
     else:
         advantages = [(r - mean_r) for r in rewards]
-    advantages = torch.tensor(advantages, dtype=torch.float32, device="mps")[:, None]
+    advantages = torch.tensor(advantages, dtype=torch.float32, )[:, None]
     return advantages
 
 def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_mask: torch.Tensor,
-         max_length: int, aggregation: str = "max_length") -> torch.Tensor:
+         max_new: int, aggregation: str = "max_length") -> torch.Tensor:
     """
     Computes loss from advantages and log probabilities, supporting
     different methods for loss aggregation.
     """
     # Check if loss aggregation mode is valid
-    valid_agg = ["max_length", "sequence", "token"]
-    if aggregation not in valid_agg:
+    valid_aggregations = ["max_length", "sequence", "token"]
+    if aggregation not in valid_aggregations:
         raise ValueError("aggregation should equal one of 'sequence', 'token', or 'max_length'")
+    num_rollouts = advantages.shape[0]
     # Compute and return loss
     if aggregation == "max_length":
-        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / max_length
+        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / max_new
     elif aggregation == "sequence":
-        seq_lengths = -torch.sum(completion_mask, axis=-1)[:, None]
+        seq_lengths = torch.sum(completion_mask, axis=-1)[:, None]
         loss = - torch.sum(advantages.detach() * log_probs * completion_mask / seq_lengths)
     else:
         num_tokens = torch.sum(completion_mask).item()
