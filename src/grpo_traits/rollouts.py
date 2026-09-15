@@ -25,7 +25,7 @@ def generate_rollouts(model: AutoModelForCausalLM, tokenized_prompts: torch.Tens
 
 def rollout_logprobs(model: AutoModelForCausalLM, completions: torch.Tensor):
     """
-    Produce tensor of logprobs for each completion, shape (batch, num_rollouts, 
+    Produce tensor of logprobs for each completion, shape (batch * num_rollouts, 
     max_completion_length - 1). There are no log probs for the first token.
     """
     # Get logits over completions

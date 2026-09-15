@@ -19,9 +19,10 @@ def completion_mask(completions: torch.Tensor, max_prompt_length: int,
     cumsum = torch.cumsum(is_pad.int(), dim=-1)
     mask = (cumsum - is_pad.int()) == 0 
     mask[:, :max_prompt_length] = False
-    return mask.int()
+    truncate_mask = mask[:, 1:].int()
+    return truncate_mask
 
-def compute_advantage(rewards: list, std_correct: bool = True, device: str = None) -> torch.Tensor:
+def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
     """
     Computes advantages from rewards, optionally without division by std.
     """
@@ -46,7 +47,7 @@ def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_m
     valid_aggregations = ["max_length", "sequence", "token"]
     if aggregation not in valid_aggregations:
         raise ValueError("aggregation should equal one of 'sequence', 'token', or 'max_length'")
-    num_rollouts = advantages.shape[0]
+
     # Compute and return loss
     if aggregation == "max_length":
         loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / max_new
