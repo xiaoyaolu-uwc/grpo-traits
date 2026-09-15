@@ -9,30 +9,17 @@ import torch
 import statistics as stats
 
 
-def stack_rollouts(rollouts: list, prompt_length: int, 
-                   max_new: int, pad_id: int) -> tuple:
+def completion_mask(completions: torch.Tensor, max_prompt_length: int, 
+                    pad_id: int) -> torch.Tensor:
     """
-    Builds rollouts tensor and completion mask.
+    Generate completion mask given completions.
     """
-    mask = []
-    stacked_rollouts = []
-    for rollout in rollouts:
-        # Compute relevant lengths
-        seq_len = rollout.shape[0] - prompt_length
-        pad_len = max_new - rollout.shape[0]
-        # Build padded rollouts
-        padding = torch.full((pad_len, ), pad_id)
-        padded = torch.cat((rollout, padding), dim=0)
-        stacked_rollouts.append(padded)
-        # Build mask
-        prompt_indic = torch.full((prompt_length, ), 0)
-        completion_indic = torch.full((seq_len, ), 1)
-        padding_indic = torch.full((pad_len, ), 0)
-        completion_mask = torch.cat([prompt_indic, completion_indic, padding_indic], dim=0)
-        mask.append(completion_mask)
-    mask = torch.stack(mask)
-    stacked_rollouts = torch.stack(stacked_rollouts)
-    return stacked_rollouts, mask
+    is_pad = completions == pad_id
+    is_pad[:, :max_prompt_length] = False # Ignore the padding at the front 
+    cumsum = torch.cumsum(is_pad.int(), dim=-1)
+    mask = (cumsum - is_pad.int()) == 0 
+    mask[:, :max_prompt_length] = False
+    return mask.int()
 
 def compute_advantage(rewards: list, std_correct: bool = True, device: str = None) -> torch.Tensor:
     """

@@ -14,12 +14,11 @@ def tokenize_prompts(prompts: list, tokenizer: AutoTokenizer) -> torch.Tensor:
     return torch.tensor(padded_prompts)
 
 @torch.no_grad
-def generate_rollouts(model: AutoModelForCausalLM, tokenizer: AutoTokenizer, prompts: list, 
+def generate_rollouts(model: AutoModelForCausalLM, tokenized_prompts: torch.Tensor, 
                       max_new: int, num_rollouts: int) -> torch.Tensor:
     """
-    Produce completion tensor, shape (batch, num_rollouts, max_completion_length)
+    Produce completion tensor, shape (batch * num_rollouts, max_completion_length)
     """
-    tokenized_prompts = tokenize_prompts(prompts, tokenizer).to(model.device)
     completions = model.generate(tokenized_prompts, max_new_tokens=max_new, 
                                  num_return_sequences=num_rollouts)
     return completions

@@ -1,29 +1,26 @@
 import pytest
 import torch
-import src.grpo_traits.core as core
-import statistics as stats
+from grpo_traits import core
 
 # =====================================================================================
 # 1. Tests for stack rollouts
 # =====================================================================================
 stack_rollouts_data = [
-    ([torch.tensor([1, 1, 1])], 1, 4, 151643, 
-     torch.tensor([1, 1, 1, 151643]), torch.tensor([0, 1, 1, 0])),
-    ([torch.tensor([1, 1, 2, 2]), torch.tensor([1, 1])], 1, 4, 151643,
-     # stacked padded tensors
-     torch.tensor([[1, 1, 2, 2], 
-                   [1, 1, 151643, 151643]]),
-    # completion mask
-     torch.tensor([[0, 1, 1, 1],
-                  [0, 1, 0, 0]])),
+    (torch.tensor([[1, 1, 1, 151643]]), 1, 151643, torch.tensor([0, 1, 1, 1])),
+    (torch.tensor([
+        [151643, 1, 2, 2, 151643], 
+        [1, 1, 2, 151643, 151643]
+                   ]), 2, 151643,
+     torch.tensor([
+         [0, 0, 1, 1, 1],
+         [0, 0, 1, 1, 0]
+         ])),
 ]
-@pytest.mark.parametrize("rollouts,prompt_length,max_length,pad_id,stacked,mask", stack_rollouts_data)
-def test_stack_rollouts(rollouts, prompt_length, max_length, pad_id, stacked, mask):
-    computed_stacked, computed_mask = core.stack_rollouts(rollouts, prompt_length, max_length, pad_id)
-    print(computed_stacked)
-    print(computed_mask)
-    assert torch.all(computed_stacked == stacked)
-    assert torch.all(computed_mask == mask)
+
+@pytest.mark.parametrize("completions, max_prompt_length, pad_id, mask", stack_rollouts_data)
+def test_completion_mask(completions, max_prompt_length, pad_id, mask):
+    computed_mask = core.completion_mask(completions, max_prompt_length, pad_id)
+    assert torch.all(computed_mask  == mask)
 
 # =====================================================================================
 # 2. Tests for compute_advantage (with std_correct=True)
