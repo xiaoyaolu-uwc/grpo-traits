@@ -22,18 +22,22 @@ def completion_mask(completions: torch.Tensor, max_prompt_length: int,
     truncate_mask = mask[:, 1:].int()
     return truncate_mask
 
-def compute_advantage(rewards: list, std_correct: bool = True) -> torch.Tensor:
+def compute_advantage(rewards: list, group_size: int, std_correct: bool = True) -> torch.Tensor:
     """
     Computes advantages from rewards, optionally without division by std.
     """
-    mean_r = stats.mean(rewards)
-    print(mean_r)
-    std_r = stats.pstdev(rewards)
-    print(std_r)
-    if std_correct:
-        advantages = [(r - mean_r) /  (std_r + 1e-5) for r in rewards]
-    else:
-        advantages = [(r - mean_r) for r in rewards]
+    num_batches = int(len(rewards) / group_size)
+    advantages = []
+    for i in range(num_batches):
+        start_idx = i * group_size
+        end_idx = (i + 1) * group_size
+        batch_rewards = rewards[start_idx:end_idx]
+        mean_r = stats.mean(batch_rewards)
+        std_r = stats.pstdev(batch_rewards)
+        if std_correct:
+            advantages += [(r - mean_r) /  (std_r + 1e-5) for r in batch_rewards]
+        else:
+            advantages += [(r - mean_r) for r in rewards]
     advantages = torch.tensor(advantages, dtype=torch.float32, )[:, None]
     return advantages
 
