@@ -15,12 +15,12 @@ def tokenize_prompts(prompts: list, tokenizer: AutoTokenizer) -> torch.Tensor:
 
 @torch.no_grad
 def generate_rollouts(model: AutoModelForCausalLM, tokenized_prompts: torch.Tensor, 
-                      max_new: int, group_size: int) -> torch.Tensor:
+                      max_new: int, group_size: int, do_sample: bool = True) -> torch.Tensor:
     """
     Produce completion tensor, shape (batch * group_size, max_completion_length)
     """
     completions = model.generate(tokenized_prompts, max_new_tokens=max_new, 
-                                 num_return_sequences=group_size)
+                                 num_return_sequences=group_size, do_sample=do_sample)
     return completions
 
 def rollout_logprobs(model: AutoModelForCausalLM, completions: torch.Tensor):

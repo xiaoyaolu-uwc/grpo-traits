@@ -9,6 +9,7 @@ from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from grpo_traits import core, rollouts, reward, prompts, metrics
+from grpo_traits.evaluate import eval_model
 
 # ---------- constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
@@ -28,19 +29,12 @@ TRAIN_PATH = DATA_DIR / "train.jsonl"
 EVAL_PATH = DATA_DIR / "test.jsonl"
 LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 
-# ---------- data ----------
+# ---------- Data loading functions ----------
 def load_rows(path):
     with open(path) as f:
         return [json.loads(line) for line in f]
 
-train_rows = load_rows(TRAIN_PATH)
-eval_rows = load_rows(EVAL_PATH)
-answerable_rows = [r for r in rows if r["answerable"]]
-unanswerable_rows = [r for r in rows if not r["answerable"]]
-random.shuffle(answerable_rows)
-random.shuffle(unanswerable_rows)
-
-def next_batch(step, size=B):
+def next_batch(step, answerable_rows, unanswerable_rows, size=B):
     """Returns a list of training rows, alternating between answerable and unanswerable rows."""
     pool = answerable_rows if step % 2 == 0 else unanswerable_rows
     start = (step // 2) * size
@@ -48,7 +42,7 @@ def next_batch(step, size=B):
     return picked
 
 def main(run_name = ""):
-    # ---------- setup ----------
+    # ---------- Training setup ----------
     # Seeding
     random.seed(SEED)
     torch.manual_seed(SEED)
@@ -70,15 +64,22 @@ def main(run_name = ""):
     # Optimizer
     optimizer = AdamW(model.parameters(), lr=LR)
 
-    # Intitialize metrics logger
-    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FILEDS)
+    # ---------- Data ----------
+    train_rows = load_rows(TRAIN_PATH)
+    eval_rows = load_rows(EVAL_PATH)
+    answerable_rows = [r for r in train_rows if r["answerable"]]
+    unanswerable_rows = [r for r in train_rows if not r["answerable"]]
+    random.shuffle(answerable_rows)
+    random.shuffle(unanswerable_rows)
+
+    # ---------- Logging ----------
+    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS)
     eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="_eval")
 
     # Baseline eval
-    baseline_acc, baseline_stats = eval.eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    __builtins__, baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
     eval_logger.log(
         step=0,
-        avg_acc=baseline_acc,
         **baseline_stats,
     )
 
@@ -88,14 +89,13 @@ def main(run_name = ""):
         # Get rows and build prompts
         rows = next_batch(step)
         questions = [row["question"] for row in rows]
-        prompts = [prompts.build_prompt(question) for question in questions]
-
+        prompts = [prompts.build_prompt(question, tokenizer) for question in questions]
         # Run rollouts
         generation_start = time.perf_counter()
-        tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer)
+        tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
         completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, max_new=MAX_NEW, group_size=G)
         decoded_completions = tokenizer.batch_decode(
-            completion_ids,
+            completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
         )
 
@@ -104,33 +104,36 @@ def main(run_name = ""):
         rewards, answer_stats = reward.compute_reward(answers=answers, group_size=G, rows=rows, is_strict=IS_STRICT)
 
         # Advantage and log_probs
-        completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=MAX_NEW, pad_id=tokenizer.pad_token_id)
+        completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
         advantages = core.compute_advantage(rewards=rewards, group_size=G, std_correct=STD_CORRECT)
         log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids)
 
         # Compute loss
-        loss = core.compute_loss(advantages=advantages, log_probs=log_probs, completion_mask=completion_mask)
+        loss = core.compute_loss(advantages=advantages, log_probs=log_probs, completion_mask=completion_mask, max_new=MAX_NEW, aggregation=AGGREGATION)
 
         # Backward 
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
         optimizer.step()
 
-        # Compute metrics
+        # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
         avg_response_lengths = resp_lengths.mean().item()
+
+        # Compute tokens per second
         if device.type == "mps":
             torch.mps.synchronize()
         step_secs = time.perf_counter() - generation_start
-        tokens_per_sec = generation_start.sum().item() / step_secs
+        tokens_per_sec = resp_lengths / step_secs
         adv_t = advantages.view(B, G)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
 
         # Report metrics
-        train_logger.log_metrics(
+        train_logger.log(
             step=step,
             total_steps=STEPS,
-            loss=loss,
+            loss=loss.item(),
             reward_avg=stats.mean(rewards),
             tokens_per_sec=tokens_per_sec,
             avg_response_len=avg_response_lengths,
@@ -144,9 +147,8 @@ def main(run_name = ""):
         )
 
     # ---------- final eval ----------
-    final_acc, final_stats = eval.eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
     eval_logger.log(
         step=STEPS,
-        avg_acc=final_acc,
         **final_stats,
     )
