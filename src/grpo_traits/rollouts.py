@@ -15,17 +15,17 @@ def tokenize_prompts(prompts: list, tokenizer: AutoTokenizer) -> torch.Tensor:
 
 @torch.no_grad
 def generate_rollouts(model: AutoModelForCausalLM, tokenized_prompts: torch.Tensor, 
-                      max_new: int, num_rollouts: int) -> torch.Tensor:
+                      max_new: int, group_size: int) -> torch.Tensor:
     """
-    Produce completion tensor, shape (batch * num_rollouts, max_completion_length)
+    Produce completion tensor, shape (batch * group_size, max_completion_length)
     """
     completions = model.generate(tokenized_prompts, max_new_tokens=max_new, 
-                                 num_return_sequences=num_rollouts)
+                                 num_return_sequences=group_size)
     return completions
 
 def rollout_logprobs(model: AutoModelForCausalLM, completions: torch.Tensor):
     """
-    Produce tensor of logprobs for each completion, shape (batch * num_rollouts, 
+    Produce tensor of logprobs for each completion, shape (batch * group_size, 
     max_completion_length - 1). There are no log probs for the first token.
     """
     # Get logits over completions
