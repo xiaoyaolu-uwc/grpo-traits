@@ -37,7 +37,7 @@ def compute_advantage(rewards: list, group_size: int, std_correct: bool = True) 
         if std_correct:
             advantages += [(r - mean_r) /  (std_r + 1e-5) for r in batch_rewards]
         else:
-            advantages += [(r - mean_r) for r in rewards]
+            advantages += [(r - mean_r) for r in batch_rewards]
     advantages = torch.tensor(advantages, dtype=torch.float32, )[:, None]
     return advantages
 
