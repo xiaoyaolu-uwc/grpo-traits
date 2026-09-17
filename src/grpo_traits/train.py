@@ -25,6 +25,7 @@ STD_CORRECT = True         # Original GRPO vs. DR. GRPO
 
 DATA_DIR = Path(__file__).parent / "data"
 TRAIN_PATH = DATA_DIR / "train.jsonl"
+EVAL_PATH = DATA_DIR / "test.jsonl"
 LOG_DIR = Path(__file__).parent.parent.parent / "logs"
 
 # ---------- data ----------
@@ -127,8 +128,8 @@ def main(run_name = ""):
             avg_response_len=avg_response_lengths,
             adv_avg=adv_avg,
             adv_std=adv_std,
-            eval_acc,
             **answer_stats,
+            eval_acc=None,
             kl_loss=None,
             policy_ratio=None,
             entropy_avg=None,
