@@ -33,10 +33,6 @@ class MetricsLogger:
         with self.file_path.open("w", newline="") as f:
             csv.DictWriter(f, fieldnames=self.field_names).writeheader()
 
-        with self.file_path.open("w", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=self.field_names)
-            writer.writeheader()
-
     def log_metrics(self, **metrics):
         with self.file_path.open("a", newline="") as file:
             writer = csv.DictWriter(

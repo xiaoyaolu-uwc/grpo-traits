@@ -10,7 +10,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from grpo_traits import core, rollouts, reward, metrics
 from grpo_traits.evaluate import eval_model
-from grpo_traits.prompts import build_prompts
+from grpo_traits.prompts import build_prompt
 
 # ---------- constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
@@ -90,7 +90,7 @@ def main(run_name = ""):
         # Get rows and build prompts
         rows = next_batch(step, answerable_rows, unanswerable_rows)
         questions = [row["question"] for row in rows]
-        prompts = [build_prompts(question, tokenizer) for question in questions]
+        prompts = [build_prompt(question, tokenizer) for question in questions]
         # Run rollouts
         generation_start = time.perf_counter()
         tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
@@ -112,11 +112,6 @@ def main(run_name = ""):
         # Compute loss
         loss = core.compute_loss(advantages=advantages, log_probs=log_probs, completion_mask=completion_mask, max_new=MAX_NEW, aggregation=AGGREGATION)
 
-        # Backward 
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-        optimizer.step()
-
         # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
         avg_response_lengths = resp_lengths.mean().item()
@@ -128,10 +123,16 @@ def main(run_name = ""):
         tokens_per_sec = resp_lengths.sum().item() / step_secs
 
         # Compute avg & std of reward and adv
-        reward_std = torch.tensor(rewards).view(B, G).std(dim=-1).mean().item()
+        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, G).std(dim=-1).mean().item()
         adv_t = advantages.view(B, G)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
+
+        # Backward (skip when rollouts are degenerate)
+        if adv_std != 0:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            optimizer.step()
 
         # Report metrics
         train_logger.log_metrics(
