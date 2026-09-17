@@ -103,14 +103,27 @@ def main(run_name = ""):
         # Compute reward and answer stats
         answers = reward.extract_answers(decoded_completions)
         rewards, answer_stats = reward.compute_reward(answers=answers, group_size=G, rows=rows, is_strict=IS_STRICT)
+        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, G).std(dim=-1).mean().item()
 
-        # Advantage and log_probs
+        # Advantage and advantage statistics
         completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
-        advantages = core.compute_advantage(rewards=rewards, group_size=G, std_correct=STD_CORRECT)
-        log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids)
+        advantages = core.compute_advantage(rewards=rewards, group_size=G, std_correct=STD_CORRECT).to(device)
+        adv_t = advantages.view(B, G)
+        adv_avg = adv_t.mean().item()
+        adv_std = adv_t.std(dim=-1).mean().item()
 
-        # Compute loss
-        loss = core.compute_loss(advantages=advantages, log_probs=log_probs, completion_mask=completion_mask, max_new=MAX_NEW, aggregation=AGGREGATION)
+        # Logprobs, loss, and gradient. Skip if step is degenerate
+        if adv_std != 0:
+            log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids)
+            loss = core.compute_loss(advantages=advantages, log_probs=log_probs, 
+                                     completion_mask=completion_mask, max_new=MAX_NEW, aggregation=AGGREGATION)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+            optimizer.step()
+            loss_value = loss.item()
+        else:
+            loss_value = None
+
 
         # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
@@ -122,23 +135,11 @@ def main(run_name = ""):
         step_secs = time.perf_counter() - generation_start
         tokens_per_sec = resp_lengths.sum().item() / step_secs
 
-        # Compute avg & std of reward and adv
-        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, G).std(dim=-1).mean().item()
-        adv_t = advantages.view(B, G)
-        adv_avg = adv_t.mean().item()
-        adv_std = adv_t.std(dim=-1).mean().item()
-
-        # Backward (skip when rollouts are degenerate)
-        if adv_std != 0:
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-            optimizer.step()
-
         # Report metrics
         train_logger.log_metrics(
             step=step,
             total_steps=STEPS,
-            loss=loss.item(),
+            loss=loss_value
             reward_avg=stats.mean(rewards),
             reward_std=reward_std,
             tokens_per_sec=tokens_per_sec,
