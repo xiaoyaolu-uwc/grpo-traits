@@ -19,14 +19,14 @@ TRAIN_FIELDS = [
 EVAL_FIELDS = ["step", "avg_acc", *STAT_FIELDS]
 
 class MetricsLogger:
-    def __init__(self, run_name: str, field_names, suffix=""):
+    def __init__(self, run_name: str, field_names, suffix):
         # Make log directory if there isn't one
         logs_dir = Path(__file__).parent / "logs"
         logs_dir.mkdir(exist_ok=True)
 
         # Store file path
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") 
-        self.file_path = logs_dir / f"{timestamp}_{run_name}.csv"
+        self.file_path = logs_dir / f"{timestamp}_{run_name}_{suffix}.csv"
 
         # Write headers o csv
         self.field_names = list(field_names)

@@ -72,6 +72,7 @@ def compute_reward(answers: list, group_size: int, rows: list, is_strict: bool):
         "answered_of_answerable": 0,
         "abstained_of_answerable": 0,
         "malformed_of_answerable": 0,
+        "answered_of_unanswerable": 0,
         "abstained_of_unanswerable": 0,
         "malformed_of_unanswerable": 0,
     }

@@ -8,8 +8,9 @@ import torch
 from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from grpo_traits import core, rollouts, reward, prompts, metrics
+from grpo_traits import core, rollouts, reward, metrics
 from grpo_traits.evaluate import eval_model
+from grpo_traits.prompts import build_prompts
 
 # ---------- constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
@@ -73,12 +74,12 @@ def main(run_name = ""):
     random.shuffle(unanswerable_rows)
 
     # ---------- Logging ----------
-    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS)
-    eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="_eval")
+    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS, suffix="train")
+    eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="eval")
 
     # Baseline eval
-    __builtins__, baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
-    eval_logger.log(
+    baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    eval_logger.log_metrics(
         step=0,
         **baseline_stats,
     )
@@ -87,9 +88,9 @@ def main(run_name = ""):
     for step in range(STEPS):
         optimizer.zero_grad()
         # Get rows and build prompts
-        rows = next_batch(step)
+        rows = next_batch(step, answerable_rows, unanswerable_rows)
         questions = [row["question"] for row in rows]
-        prompts = [prompts.build_prompt(question, tokenizer) for question in questions]
+        prompts = [build_prompts(question, tokenizer) for question in questions]
         # Run rollouts
         generation_start = time.perf_counter()
         tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
@@ -113,7 +114,7 @@ def main(run_name = ""):
 
         # Backward 
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
         optimizer.step()
 
         # Compute avg response length
@@ -124,23 +125,26 @@ def main(run_name = ""):
         if device.type == "mps":
             torch.mps.synchronize()
         step_secs = time.perf_counter() - generation_start
-        tokens_per_sec = resp_lengths / step_secs
+        tokens_per_sec = resp_lengths.sum().item() / step_secs
+
+        # Compute avg & std of reward and adv
+        reward_std = torch.tensor(rewards).view(B, G).std(dim=-1).mean().item()
         adv_t = advantages.view(B, G)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
 
         # Report metrics
-        train_logger.log(
+        train_logger.log_metrics(
             step=step,
             total_steps=STEPS,
             loss=loss.item(),
             reward_avg=stats.mean(rewards),
+            reward_std=reward_std,
             tokens_per_sec=tokens_per_sec,
             avg_response_len=avg_response_lengths,
             adv_avg=adv_avg,
             adv_std=adv_std,
             **answer_stats,
-            eval_acc=None,
             kl_loss=None,
             policy_ratio=None,
             entropy_avg=None,
@@ -148,7 +152,10 @@ def main(run_name = ""):
 
     # ---------- final eval ----------
     final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
-    eval_logger.log(
+    eval_logger.log_metrics(
         step=STEPS,
         **final_stats,
     )
+
+if __name__ == "__main__": 
+    main()
