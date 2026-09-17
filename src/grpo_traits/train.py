@@ -33,7 +33,8 @@ def load_rows(path):
     with open(path) as f:
         return [json.loads(line) for line in f]
 
-rows = load_rows(TRAIN_PATH)
+train_rows = load_rows(TRAIN_PATH)
+eval_rows = load_rows(EVAL_PATH)
 answerable_rows = [r for r in rows if r["answerable"]]
 unanswerable_rows = [r for r in rows if not r["answerable"]]
 random.shuffle(answerable_rows)
@@ -45,8 +46,6 @@ def next_batch(step, size=B):
     start = (step // 2) * size
     picked = [pool[(start + j) % len(pool)] for j in range(size)]
     return picked
-
-
 
 def main(run_name = ""):
     # ---------- setup ----------
@@ -72,7 +71,16 @@ def main(run_name = ""):
     optimizer = AdamW(model.parameters(), lr=LR)
 
     # Intitialize metrics logger
-    metrics_logger = metrics.MetricsLogger(run_name)
+    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FILEDS)
+    eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="_eval")
+
+    # Baseline eval
+    baseline_acc, baseline_stats = eval.eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    eval_logger.log(
+        step=0,
+        avg_acc=baseline_acc,
+        **baseline_stats,
+    )
 
     # ---------- training loop ----------
     for step in range(STEPS):
@@ -119,7 +127,7 @@ def main(run_name = ""):
         adv_std = adv_t.std(dim=-1).mean().item()
 
         # Report metrics
-        metrics_logger.log_metrics(
+        train_logger.log_metrics(
             step=step,
             total_steps=STEPS,
             loss=loss,
@@ -134,3 +142,11 @@ def main(run_name = ""):
             policy_ratio=None,
             entropy_avg=None,
         )
+
+    # ---------- final eval ----------
+    final_acc, final_stats = eval.eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    eval_logger.log(
+        step=STEPS,
+        avg_acc=final_acc,
+        **final_stats,
+    )
