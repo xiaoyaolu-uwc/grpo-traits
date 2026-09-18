@@ -194,7 +194,7 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
 
 
     # ---------- final eval ----------
-    final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)
+    final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new, temp=temp)
     eval_logger.log_metrics(
         step=steps,
         **final_stats,
