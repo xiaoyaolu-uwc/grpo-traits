@@ -82,6 +82,24 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
     eval_logger  = metrics.MetricsLogger(run_name, time_now, metrics.EVAL_FIELDS, suffix="eval")
     sample_logger = metrics.SampleLogger(run_name, time_now)
 
+    # Log configuration of run
+    sample_logger.log_config(
+        run_name=run_name,
+        model_id=MODEL_ID,
+        batch_size=B,
+        group_size=group_size,
+        steps=steps,
+        max_new=max_new,
+        temperature=temperature,
+        lr=LR,
+        aggregation=AGGREGATION,
+        is_strict=is_strict,
+        std_correct=STD_CORRECT,
+        grad_clip=GRAD_CLIP,
+        seed=SEED,
+        system_prompt=SYSTEM_PROMPT,
+    )
+
     # Baseline eval
     baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)
     eval_logger.log_metrics(
@@ -149,7 +167,7 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
         step_secs = time.perf_counter() - generation_start
         tokens_per_sec = resp_lengths.sum().item() / step_secs
 
-        # Report metrics
+        # Log metrics
         train_logger.log_metrics(
             step=step,
             total_steps=steps,
@@ -165,6 +183,8 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
             policy_ratio=None,
             entropy_avg=None,
         )
+
+        # Log responses 
         sample_logger.log_samples(
             step=step, 
             rows=rows, 
@@ -172,6 +192,7 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
             rewards=rewards, 
             completions=decoded_completions, 
             group_size=group_size)
+
 
     # ---------- final eval ----------
     final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)

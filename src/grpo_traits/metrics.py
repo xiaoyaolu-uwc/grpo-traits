@@ -50,6 +50,10 @@ class SampleLogger:
         self.file_path = logs_dir / f"{timestamp}_{run_name}_{suffix}.jsonl"
         self.file_path.touch()
 
+    def log_config(self, **config):
+        with self.file_path.open("a") as f:
+            f.write(json.dumps({"record": "config", **config}) + "\n")
+
     def log_samples(self, step, rows, answers, rewards, completions, group_size):
         with self.file_path.open("a") as f:
             for i, row in enumerate(rows):
