@@ -1,3 +1,0 @@
-step,avg_acc,num_answerable,correct_of_answerable,answered_of_answerable,abstained_of_answerable,malformed_of_answerable,num_unanswerable,answered_of_unanswerable,abstained_of_unanswerable,malformed_of_unanswerable
-0,0.5,25,7,25,0,0,25,24,0,1
-20,0.5,25,7,25,0,0,25,24,0,1

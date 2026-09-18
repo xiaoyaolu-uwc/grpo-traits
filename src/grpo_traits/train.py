@@ -1,5 +1,7 @@
 import json
+import argparse
 import time
+from datetime import datetime
 import statistics as stats
 import random
 from pathlib import Path
@@ -12,7 +14,7 @@ from grpo_traits import core, rollouts, reward, metrics
 from grpo_traits.evaluate import eval_model
 from grpo_traits.prompts import build_prompt
 
-# ---------- constants ----------
+# ---------- default parameter constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
 B = 1                      # prompts per step
 G = 8                      # rollouts per prompt
@@ -20,6 +22,8 @@ MAX_NEW = 256
 LR = 1e-5
 STEPS = 20
 AGGREGATION = "max_length"
+TEMP = 0.7
+
 IS_STRICT = False
 GRAD_CLIP = 1.0
 SEED = 0
@@ -42,7 +46,7 @@ def next_batch(step, answerable_rows, unanswerable_rows, size=B):
     picked = [pool[(start + j) % len(pool)] for j in range(size)]
     return picked
 
-def main(run_name = ""):
+def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now):
     # ---------- Training setup ----------
     # Seeding
     random.seed(SEED)
@@ -74,19 +78,19 @@ def main(run_name = ""):
     random.shuffle(unanswerable_rows)
 
     # ---------- Logging ----------
-    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS, suffix="train")
-    eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="eval")
-    sample_logger = metrics.SampleLogger(run_name)
+    train_logger = metrics.MetricsLogger(run_name, time_now, metrics.TRAIN_FIELDS, suffix="train")
+    eval_logger  = metrics.MetricsLogger(run_name, time_now, metrics.EVAL_FIELDS, suffix="eval")
+    sample_logger = metrics.SampleLogger(run_name, time_now)
 
     # Baseline eval
-    baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)
     eval_logger.log_metrics(
         step=0,
         **baseline_stats,
     )
 
     # ---------- training loop ----------
-    for step in range(STEPS):
+    for step in range(steps):
         optimizer.zero_grad()
         # Get rows and build prompts
         rows = next_batch(step, answerable_rows, unanswerable_rows)
@@ -97,7 +101,8 @@ def main(run_name = ""):
         # Run rollouts
         generation_start = time.perf_counter()
         tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
-        completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, max_new=MAX_NEW, group_size=G)
+        completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, 
+                                                    max_new=max_new, group_size=group_size, temp=temperature)
         decoded_completions = tokenizer.batch_decode(
             completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
@@ -106,23 +111,25 @@ def main(run_name = ""):
 
         # Compute reward and answer stats
         answers = reward.extract_answers(decoded_completions)
-        rewards, answer_stats = reward.compute_reward(answers=answers, group_size=G, rows=rows, is_strict=IS_STRICT)
-        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, G).std(dim=-1).mean().item()
+        rewards, answer_stats = reward.compute_reward(answers=answers, group_size=group_size, 
+                                                      rows=rows, is_strict=is_strict)
+        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, group_size).std(dim=-1).mean().item()
         print("rewards: ", rewards)
 
         # Advantage and advantage statistics
         completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
-        advantages = core.compute_advantage(rewards=rewards, group_size=G, std_correct=STD_CORRECT).to(device)
+        advantages = core.compute_advantage(rewards=rewards, group_size=group_size,
+                                            std_correct=STD_CORRECT).to(device)
         print("advantages: ", advantages)
-        adv_t = advantages.view(B, G)
+        adv_t = advantages.view(B, group_size)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
 
         # Logprobs, loss, and gradient. Skip if step is degenerate
-        if adv_std != 0:
+        if adv_std > 0:
             log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids)
             loss = core.compute_loss(advantages=advantages, log_probs=log_probs, 
-                                     completion_mask=completion_mask, max_new=MAX_NEW, aggregation=AGGREGATION)
+                                     completion_mask=completion_mask, max_new=max_new, aggregation=AGGREGATION)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
@@ -145,7 +152,7 @@ def main(run_name = ""):
         # Report metrics
         train_logger.log_metrics(
             step=step,
-            total_steps=STEPS,
+            total_steps=steps,
             loss=loss_value,
             reward_avg=stats.mean(rewards),
             reward_std=reward_std,
@@ -164,14 +171,36 @@ def main(run_name = ""):
             answers=answers, 
             rewards=rewards, 
             completions=decoded_completions, 
-            group_size=G)
+            group_size=group_size)
 
     # ---------- final eval ----------
-    final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
+    final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)
     eval_logger.log_metrics(
-        step=STEPS,
+        step=steps,
         **final_stats,
     )
 
-if __name__ == "__main__": 
-    main()
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--run_name", default="run")
+    p.add_argument("--steps", type=int, default=STEPS)
+    p.add_argument("--group_size", type=int, default=G)
+    p.add_argument("--max_new", type=int, default=MAX_NEW)
+    p.add_argument("--temperature", type=float, default=TEMP)
+    p.add_argument("--strict", action="store_true")
+    return p.parse_args()
+
+if __name__ == "__main__":
+    args = parse_args()
+    now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") 
+
+    main(
+        run_name=args.run_name,
+        steps=args.steps,
+        group_size=args.group_size,
+        max_new=args.max_new,
+        temperature=args.temperature,
+        is_strict=args.strict,
+        time_now=now
+    )
