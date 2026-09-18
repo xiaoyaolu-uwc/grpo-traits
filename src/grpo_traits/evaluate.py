@@ -15,12 +15,14 @@ def eval_model(model, tokenizer, rows, max_new, temp, chunk_size=8, is_strict=Fa
 
             # Build prompts for model
             prompts = [build_prompt(row["question"], tokenizer) for row in chunk]
-            tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(model.device)
+            tokenized_prompts, prompt_mask = rollouts.tokenize_prompts(prompts, tokenizer)
+            tokenized_prompts = tokenized_prompts.to(model.device)
+            prompt_mask = prompt_mask.to(model.device)
             
             # Run rollouts on prompts
             completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, 
                                                         max_new=max_new, group_size=1, do_sample=False, 
-                                                        temp=temp)
+                                                        temp=temp, prompt_mask=prompt_mask)
             decoded_completions = tokenizer.batch_decode(
                         completion_ids[:,tokenized_prompts.shape[-1]:],
                         skip_special_tokens=True

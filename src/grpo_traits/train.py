@@ -38,14 +38,14 @@ def load_rows(path):
     with open(path) as f:
         return [json.loads(line) for line in f]
 
-def next_batch(step, answerable_rows, unanswerable_rows, size=B):
+def next_batch(step, answerable_rows, unanswerable_rows, size):
     """Returns a list of training rows, alternating between answerable and unanswerable rows."""
     pool = answerable_rows if step % 2 == 0 else unanswerable_rows
     start = (step // 2) * size
     picked = [pool[(start + j) % len(pool)] for j in range(size)]
     return picked
 
-def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
+def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
     # ---------- Training setup ----------
     # Seeding
     random.seed(SEED)
@@ -77,15 +77,15 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
     random.shuffle(unanswerable_rows)
 
     # ---------- Logging ----------
-    train_logger = metrics.MetricsLogger(run_name, time_now, metrics.TRAIN_FIELDS, suffix="train")
-    eval_logger  = metrics.MetricsLogger(run_name, time_now, metrics.EVAL_FIELDS, suffix="eval")
-    sample_logger = metrics.SampleLogger(run_name, time_now)
+    train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS, suffix="train")
+    eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="eval")
+    sample_logger = metrics.SampleLogger(run_name)
 
     # Log configuration of run
     sample_logger.log_config(
         run_name=run_name,
         model_id=MODEL_ID,
-        batch_size=B,
+        batch_size=batch_size,
         group_size=group_size,
         steps=steps,
         max_new=max_new,
@@ -110,15 +110,18 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
     for step in range(steps):
         optimizer.zero_grad()
         # Get rows and build prompts
-        rows = next_batch(step, answerable_rows, unanswerable_rows)
+        rows = next_batch(step, answerable_rows, unanswerable_rows, batch_size)
         questions = [row["question"] for row in rows]
         inputs = [prompts.build_prompt(question, tokenizer) for question in questions]
 
         # Run rollouts
         generation_start = time.perf_counter()
-        tokenized_prompts = rollouts.tokenize_prompts(inputs, tokenizer).to(device)
+        tokenized_prompts, prompt_mask = rollouts.tokenize_prompts(inputs, tokenizer)
+        tokenized_prompts = tokenized_prompts.to(device)
+        prompt_mask = prompt_mask.to(device)
         completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, 
-                                                    max_new=max_new, group_size=group_size, temp=temp)
+                                                    max_new=max_new, group_size=group_size, temp=temp,
+                                                    prompt_mask=prompt_mask)
         decoded_completions = tokenizer.batch_decode(
             completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
@@ -128,19 +131,20 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
         answers = reward.extract_answers(decoded_completions)
         rewards, answer_stats = reward.compute_reward(answers=answers, group_size=group_size, 
                                                       rows=rows, is_strict=is_strict)
-        reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, group_size).std(dim=-1).mean().item()
+        reward_std = torch.tensor(rewards, dtype=torch.float32).view(batch_size, group_size).std(dim=-1).mean().item()
 
         # Advantage and advantage statistics
         completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
         advantages = core.compute_advantage(rewards=rewards, group_size=group_size,
                                             std_correct=STD_CORRECT).to(device)
-        adv_t = advantages.view(B, group_size)
+        adv_t = advantages.view(batch_size, group_size)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
 
         # Logprobs, loss, and gradient. Skip if step is degenerate
         if adv_std > 0:
-            log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids)
+            log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids,
+                                                  prompt_mask=prompt_mask)
             loss = core.compute_loss(advantages=advantages, log_probs=log_probs, 
                                      completion_mask=completion_mask, max_new=max_new, aggregation=AGGREGATION)
             loss.backward()
@@ -209,8 +213,9 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--run_name", default="run")
+    p.add_argument("--run_name", default=None)
     p.add_argument("--steps", type=int, default=STEPS)
+    p.add_argument("--batch_size", type=int, default=B)
     p.add_argument("--group_size", type=int, default=G)
     p.add_argument("--max_new", type=int, default=MAX_NEW)
     p.add_argument("--temp", type=float, default=TEMP)
@@ -222,11 +227,11 @@ if __name__ == "__main__":
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S") 
 
     main(
-        run_name=args.run_name,
+        run_name=args.run_name if args.run_name else now,
         steps=args.steps,
+        batch_size=args.batch_size,
         group_size=args.group_size,
         max_new=args.max_new,
         temp=args.temp,
         is_strict=args.strict,
-        time_now=now
     )

@@ -7,7 +7,6 @@ SYSTEM_PROMPT = (
     "Think step by step before answering, then end your reply with your answer in the following format:\n"
     "<answer>NUMBER</answer> where NUMBER is your answer or "
     "<answer>ABSTAIN</answer> if it is unsolvable.\n"
-    "Consider whether the question is answerable or not."
 )
 
 def build_prompt(question: str, tokenizer:AutoTokenizer) -> str:

@@ -20,13 +20,13 @@ TRAIN_FIELDS = [
 EVAL_FIELDS = ["step", "avg_acc", *STAT_FIELDS]
 
 class MetricsLogger:
-    def __init__(self, run_name: str, time_now, field_names, suffix):
+    def __init__(self, run_name: str, field_names, suffix):
         # Make log directory if there isn't one
         logs_dir = Path(__file__).parent / "logs"
         logs_dir.mkdir(exist_ok=True)
 
         # Store file path
-        self.file_path = logs_dir / f"{time_now}_{run_name}_{suffix}.csv"
+        self.file_path = logs_dir / f"{run_name}_{suffix}.csv"
 
         # Write headers o csv
         self.field_names = list(field_names)
@@ -42,10 +42,10 @@ class MetricsLogger:
             writer.writerow(metrics)
 
 class SampleLogger:
-    def __init__(self, run_name: str, time_now, suffix="samples"):
+    def __init__(self, run_name: str, suffix="samples"):
         logs_dir = Path(__file__).parent / "logs"
         logs_dir.mkdir(exist_ok=True)
-        self.file_path = logs_dir / f"{time_now}_{run_name}_{suffix}.jsonl"
+        self.file_path = logs_dir / f"{run_name}_{suffix}.jsonl"
         self.file_path.touch()
 
     def log_config(self, **config):
