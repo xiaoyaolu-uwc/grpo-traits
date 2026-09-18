@@ -113,7 +113,6 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
         rows = next_batch(step, answerable_rows, unanswerable_rows)
         questions = [row["question"] for row in rows]
         inputs = [prompts.build_prompt(question, tokenizer) for question in questions]
-        print(questions)
 
         # Run rollouts
         generation_start = time.perf_counter()
@@ -124,20 +123,17 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
             completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
         )
-        print("completions: ", decoded_completions)
 
         # Compute reward and answer stats
         answers = reward.extract_answers(decoded_completions)
         rewards, answer_stats = reward.compute_reward(answers=answers, group_size=group_size, 
                                                       rows=rows, is_strict=is_strict)
         reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, group_size).std(dim=-1).mean().item()
-        print("rewards: ", rewards)
 
         # Advantage and advantage statistics
         completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
         advantages = core.compute_advantage(rewards=rewards, group_size=group_size,
                                             std_correct=STD_CORRECT).to(device)
-        print("advantages: ", advantages)
         adv_t = advantages.view(B, group_size)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
@@ -153,8 +149,6 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
             loss_value = loss.item()
         else:
             loss_value = None
-        print("loss: ", loss_value)
-        print("adv_std: ", adv_std)
 
         # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
@@ -166,18 +160,24 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
         step_secs = time.perf_counter() - generation_start
         tokens_per_sec = resp_lengths.sum().item() / step_secs
 
+        # Check memory usage
+        mem_live = torch.mps.current_allocated_memory() / 1e9 if device.type == "mps" else None
+        mem_total = torch.mps.driver_allocated_memory() / 1e9 if device.type == "mps" else None
+
         # Log metrics
         train_logger.log_metrics(
             step=step,
+            mem_live=mem_live,
+            mem_total=mem_total,
             total_steps=steps,
             loss=loss_value,
             reward_avg=stats.mean(rewards),
             reward_std=reward_std,
-            tokens_per_sec=tokens_per_sec,
-            avg_response_len=avg_response_lengths,
             adv_avg=adv_avg,
             adv_std=adv_std,
             **answer_stats,
+            tokens_per_sec=tokens_per_sec,
+            avg_response_len=avg_response_lengths,
             kl_loss=None,
             policy_ratio=None,
             entropy_avg=None,
@@ -191,6 +191,12 @@ def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
             rewards=rewards, 
             completions=decoded_completions, 
             group_size=group_size)
+
+        # Release memory
+        if adv_std > 0:
+            del log_probs, loss
+        if device.type == "mps":
+            torch.mps.empty_cache()
 
 
     # ---------- final eval ----------

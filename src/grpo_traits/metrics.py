@@ -11,7 +11,7 @@ STAT_FIELDS = [
 ]
 
 TRAIN_FIELDS = [
-    "step", "total_steps", "loss", "reward_avg", "reward_std",
+    "step", "total_steps", "mem_live", "mem_total", "loss", "reward_avg", "reward_std",
     "kl_loss", "policy_ratio",
     *STAT_FIELDS,
     "tokens_per_sec", "avg_response_len", "adv_avg", "adv_std", "entropy_avg",
