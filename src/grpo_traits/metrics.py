@@ -1,4 +1,5 @@
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -40,3 +41,31 @@ class MetricsLogger:
                 restval=None, extrasaction="raise",
             )
             writer.writerow(metrics)
+
+class SampleLogger:
+    def __init__(self, run_name: str, suffix="samples"):
+        logs_dir = Path(__file__).parent / "logs"
+        logs_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.file_path = logs_dir / f"{timestamp}_{run_name}_{suffix}.jsonl"
+        self.file_path.touch()
+
+    def log_samples(self, step, rows, answers, rewards, completions, group_size):
+        with self.file_path.open("a") as f:
+            for i, row in enumerate(rows):
+                lo, hi = i * group_size, (i + 1) * group_size
+                f.write(json.dumps({
+                    "step": step,
+                    "question": row["question"],
+                    "answerable": row["answerable"],
+                    "expected": row["answer"],
+                    "rollouts": [
+                        {
+                            "text": completions[j],
+                            "tag": str(answers[j][0]),
+                            "value": answers[j][1],
+                            "reward": rewards[j],
+                        }
+                        for j in range(lo, hi)
+                    ],
+                }) + "\n")

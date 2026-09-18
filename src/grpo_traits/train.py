@@ -15,8 +15,8 @@ from grpo_traits.prompts import build_prompt
 # ---------- constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
 B = 1                      # prompts per step
-G = 4                      # rollouts per prompt
-MAX_NEW = 64
+G = 8                      # rollouts per prompt
+MAX_NEW = 256
 LR = 1e-5
 STEPS = 20
 AGGREGATION = "max_length"
@@ -76,6 +76,7 @@ def main(run_name = ""):
     # ---------- Logging ----------
     train_logger = metrics.MetricsLogger(run_name, metrics.TRAIN_FIELDS, suffix="train")
     eval_logger  = metrics.MetricsLogger(run_name, metrics.EVAL_FIELDS, suffix="eval")
+    sample_logger = metrics.SampleLogger(run_name)
 
     # Baseline eval
     baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
@@ -91,6 +92,8 @@ def main(run_name = ""):
         rows = next_batch(step, answerable_rows, unanswerable_rows)
         questions = [row["question"] for row in rows]
         prompts = [build_prompt(question, tokenizer) for question in questions]
+        print(questions)
+
         # Run rollouts
         generation_start = time.perf_counter()
         tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
@@ -99,15 +102,18 @@ def main(run_name = ""):
             completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
         )
+        print("completions: ", decoded_completions)
 
         # Compute reward and answer stats
         answers = reward.extract_answers(decoded_completions)
         rewards, answer_stats = reward.compute_reward(answers=answers, group_size=G, rows=rows, is_strict=IS_STRICT)
         reward_std = torch.tensor(rewards, dtype=torch.float32).view(B, G).std(dim=-1).mean().item()
+        print("rewards: ", rewards)
 
         # Advantage and advantage statistics
         completion_mask = core.completion_mask(completions=completion_ids, max_prompt_length=tokenized_prompts.shape[-1], pad_id=tokenizer.pad_token_id)
         advantages = core.compute_advantage(rewards=rewards, group_size=G, std_correct=STD_CORRECT).to(device)
+        print("advantages: ", advantages)
         adv_t = advantages.view(B, G)
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
@@ -123,7 +129,8 @@ def main(run_name = ""):
             loss_value = loss.item()
         else:
             loss_value = None
-
+        print("loss: ", loss_value)
+        print("adv_std: ", adv_std)
 
         # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
@@ -139,7 +146,7 @@ def main(run_name = ""):
         train_logger.log_metrics(
             step=step,
             total_steps=STEPS,
-            loss=loss_value
+            loss=loss_value,
             reward_avg=stats.mean(rewards),
             reward_std=reward_std,
             tokens_per_sec=tokens_per_sec,
@@ -151,6 +158,13 @@ def main(run_name = ""):
             policy_ratio=None,
             entropy_avg=None,
         )
+        sample_logger.log_samples(
+            step=step, 
+            rows=rows, 
+            answers=answers, 
+            rewards=rewards, 
+            completions=decoded_completions, 
+            group_size=G)
 
     # ---------- final eval ----------
     final_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=MAX_NEW)
