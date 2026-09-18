@@ -2,7 +2,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from grpo_traits import reward, rollouts
 from grpo_traits.prompts import build_prompt
 
-def eval_model(model, tokenizer, rows, max_new, chunk_size=8, is_strict=False):
+def eval_model(model, tokenizer, rows, max_new, temp, chunk_size=8, is_strict=False):
     """
     Compute statistics over 
     """
@@ -19,7 +19,8 @@ def eval_model(model, tokenizer, rows, max_new, chunk_size=8, is_strict=False):
             
             # Run rollouts on prompts
             completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, 
-                                                        max_new=max_new, group_size=1, do_sample=False)
+                                                        max_new=max_new, group_size=1, do_sample=False, 
+                                                        temp=temp)
             decoded_completions = tokenizer.batch_decode(
                         completion_ids[:,tokenized_prompts.shape[-1]:],
                         skip_special_tokens=True

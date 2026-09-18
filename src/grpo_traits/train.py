@@ -10,9 +10,8 @@ import torch
 from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from grpo_traits import core, rollouts, reward, metrics
+from grpo_traits import core, rollouts, reward, metrics, prompts
 from grpo_traits.evaluate import eval_model
-from grpo_traits.prompts import build_prompt
 
 # ---------- default parameter constants ----------
 MODEL_ID = "Qwen/Qwen3-0.6B"
@@ -46,7 +45,7 @@ def next_batch(step, answerable_rows, unanswerable_rows, size=B):
     picked = [pool[(start + j) % len(pool)] for j in range(size)]
     return picked
 
-def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now):
+def main(run_name, steps, group_size, max_new, temp, is_strict, time_now):
     # ---------- Training setup ----------
     # Seeding
     random.seed(SEED)
@@ -90,18 +89,18 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
         group_size=group_size,
         steps=steps,
         max_new=max_new,
-        temperature=temperature,
+        temp=temp,
         lr=LR,
         aggregation=AGGREGATION,
         is_strict=is_strict,
         std_correct=STD_CORRECT,
         grad_clip=GRAD_CLIP,
         seed=SEED,
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=prompts.SYSTEM_PROMPT,
     )
 
     # Baseline eval
-    baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new)
+    baseline_stats = eval_model(model, tokenizer, rows=eval_rows, max_new=max_new, temp=temp)
     eval_logger.log_metrics(
         step=0,
         **baseline_stats,
@@ -113,14 +112,14 @@ def main(run_name, steps, group_size, max_new, temperature, is_strict, time_now)
         # Get rows and build prompts
         rows = next_batch(step, answerable_rows, unanswerable_rows)
         questions = [row["question"] for row in rows]
-        prompts = [build_prompt(question, tokenizer) for question in questions]
+        inputs = [prompts.build_prompt(question, tokenizer) for question in questions]
         print(questions)
 
         # Run rollouts
         generation_start = time.perf_counter()
-        tokenized_prompts = rollouts.tokenize_prompts(prompts, tokenizer).to(device)
+        tokenized_prompts = rollouts.tokenize_prompts(inputs, tokenizer).to(device)
         completion_ids = rollouts.generate_rollouts(model=model, tokenized_prompts=tokenized_prompts, 
-                                                    max_new=max_new, group_size=group_size, temp=temperature)
+                                                    max_new=max_new, group_size=group_size, temp=temp)
         decoded_completions = tokenizer.batch_decode(
             completion_ids[:, tokenized_prompts.shape[-1]:],
             skip_special_tokens=True
@@ -208,7 +207,7 @@ def parse_args():
     p.add_argument("--steps", type=int, default=STEPS)
     p.add_argument("--group_size", type=int, default=G)
     p.add_argument("--max_new", type=int, default=MAX_NEW)
-    p.add_argument("--temperature", type=float, default=TEMP)
+    p.add_argument("--temp", type=float, default=TEMP)
     p.add_argument("--strict", action="store_true")
     return p.parse_args()
 
@@ -221,7 +220,7 @@ if __name__ == "__main__":
         steps=args.steps,
         group_size=args.group_size,
         max_new=args.max_new,
-        temperature=args.temperature,
+        temp=args.temp,
         is_strict=args.strict,
         time_now=now
     )
