@@ -23,6 +23,9 @@ STEPS = 20
 AGGREGATION = "max_length"
 TEMP = 0.7
 
+INNER_EPOCHS = 3
+CLIP_EPS = 0.2
+
 IS_STRICT = False
 GRAD_CLIP = 1.0
 SEED = 0
@@ -45,7 +48,8 @@ def next_batch(step, answerable_rows, unanswerable_rows, size):
     picked = [pool[(start + j) % len(pool)] for j in range(size)]
     return picked
 
-def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
+def main(run_name, steps, inner_epochs, clip_eps, 
+         batch_size, group_size, max_new, temp, is_strict):
     # ---------- Training setup ----------
     # Seeding
     random.seed(SEED)
@@ -108,7 +112,6 @@ def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
 
     # ---------- training loop ----------
     for step in range(steps):
-        optimizer.zero_grad()
         # Get rows and build prompts
         rows = next_batch(step, answerable_rows, unanswerable_rows, batch_size)
         questions = [row["question"] for row in rows]
@@ -141,18 +144,44 @@ def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
         adv_avg = adv_t.mean().item()
         adv_std = adv_t.std(dim=-1).mean().item()
 
-        # Logprobs, loss, and gradient. Skip if step is degenerate
+        # Compute loss and update
         if adv_std > 0:
-            log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids,
-                                                  prompt_mask=prompt_mask)
-            loss = core.compute_loss(advantages=advantages, log_probs=log_probs, 
-                                     completion_mask=completion_mask, max_new=max_new, aggregation=AGGREGATION)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-            optimizer.step()
-            loss_value = loss.item()
+            for k in range(inner_epochs):
+                optimizer.zero_grad()
+                # Compute logprobs and loss
+                log_probs = rollouts.rollout_logprobs(model=model, completions=completion_ids,
+                                                        prompt_mask=prompt_mask)
+                if k == 0:
+                    old_log_probs = log_probs.detach()
+                loss = core.compute_loss(advantages=advantages, log_probs=log_probs, 
+                                        old_log_probs=old_log_probs, clip_eps=clip_eps,
+                                        completion_mask=completion_mask, max_new=max_new, 
+                                        aggregation=AGGREGATION)
+                loss_value = loss.item() # For logging
+
+                # Update
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+                optimizer.step()
+
+                # Ratio diagnostics over unmasked completion tokens
+                with torch.no_grad():
+                    ratios = torch.exp(log_probs - old_log_probs)
+                    n_live = completion_mask.sum()
+                    policy_ratio = ((ratios * completion_mask).sum() / n_live).item()
+                    clipped = ((ratios < 1 - clip_eps) | (ratios > 1 + clip_eps)).int()
+                    clip_frac = ((clipped * completion_mask).sum() / n_live).item()
+                
         else:
             loss_value = None
+            policy_ratio = None
+            clip_frac = None
+
+        # Release memory on mps (this is a problem with my machine speicfically)
+        if adv_std > 0:
+            del log_probs, loss
+        if device.type == "mps":
+            torch.mps.empty_cache()
 
         # Compute avg response length
         resp_lengths = completion_mask.sum(dim=-1).float()     
@@ -183,8 +212,8 @@ def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
             tokens_per_sec=tokens_per_sec,
             avg_response_len=avg_response_lengths,
             kl_loss=None,
-            policy_ratio=None,
-            entropy_avg=None,
+            policy_ratio=policy_ratio,
+            clip_frac=clip_frac,
         )
 
         # Log responses 
@@ -195,12 +224,6 @@ def main(run_name, steps, batch_size, group_size, max_new, temp, is_strict):
             rewards=rewards, 
             completions=decoded_completions, 
             group_size=group_size)
-
-        # Release memory
-        if adv_std > 0:
-            del log_probs, loss
-        if device.type == "mps":
-            torch.mps.empty_cache()
 
 
     # ---------- final eval ----------
@@ -215,6 +238,8 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--run_name", default=None)
     p.add_argument("--steps", type=int, default=STEPS)
+    p.add_argument("--inner_epochs", type=int, default=INNER_EPOCHS)
+    p.add_argument("--clip_eps", type=float, default=CLIP_EPS)
     p.add_argument("--batch_size", type=int, default=B)
     p.add_argument("--group_size", type=int, default=G)
     p.add_argument("--max_new", type=int, default=MAX_NEW)
@@ -229,6 +254,8 @@ if __name__ == "__main__":
     main(
         run_name=args.run_name if args.run_name else now,
         steps=args.steps,
+        inner_epochs=args.inner_epochs,
+        clip_eps=args.clip_eps,
         batch_size=args.batch_size,
         group_size=args.group_size,
         max_new=args.max_new,

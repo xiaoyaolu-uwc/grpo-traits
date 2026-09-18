@@ -41,7 +41,8 @@ def compute_advantage(rewards: list, group_size: int, std_correct: bool = True) 
     advantages = torch.tensor(advantages, dtype=torch.float32, )[:, None]
     return advantages
 
-def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_mask: torch.Tensor,
+def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, old_log_probs: torch.Tensor,
+                 clip_eps: float, completion_mask: torch.Tensor,
          max_new: int, aggregation: str = "max_length") -> torch.Tensor:
     """
     Computes loss from advantages and log probabilities, supporting
@@ -52,14 +53,20 @@ def compute_loss(advantages: torch.Tensor, log_probs: torch.Tensor, completion_m
     if aggregation not in valid_aggregations:
         raise ValueError("aggregation should equal one of 'sequence', 'token', or 'max_length'")
 
+    # Compute probability ratio between new and old probs
+    ratios = torch.exp(log_probs - old_log_probs) 
+    A = advantages.detach()
+    surrogate_loss = torch.minimum(ratios * A, torch.clamp(
+        ratios, 1 - clip_eps, 1 + clip_eps) * A) * completion_mask
+
     # Compute and return loss
     if aggregation == "max_length":
-        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / max_new
+        loss = - torch.sum(surrogate_loss) / max_new
     elif aggregation == "sequence":
         seq_lengths = torch.sum(completion_mask, axis=-1)[:, None]
-        loss = - torch.sum(advantages.detach() * log_probs * completion_mask / seq_lengths)
+        loss = - torch.sum(surrogate_loss / seq_lengths)
     else:
         num_tokens = torch.sum(completion_mask).item()
-        loss = - torch.sum(advantages.detach() * log_probs * completion_mask) / num_tokens
+        loss = - torch.sum(surrogate_loss) / num_tokens
     return loss
 
